@@ -7,5 +7,7 @@ data class MdFile(
     val isRemote: Boolean,
     val uri: String? = null,  // android content uri (local)
     val url: String? = null,  // http(s) url (remote)
-    val isReadOnly: Boolean = isRemote // remote files are read-only by default
+    val isReadOnly: Boolean = isRemote, // remote files are read-only by default
+    val isFavorite: Boolean = false,
+    val lastOpenedAt: Long = 0L   // epoch millis, 0 = never
 )

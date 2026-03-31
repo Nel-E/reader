@@ -5,12 +5,15 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nele.reader.data.FileRepository
+import com.nele.reader.model.FoldSymbols
 import com.nele.reader.model.MdFile
+import com.nele.reader.model.SyntaxColors
 import com.nele.reader.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -33,9 +36,31 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { repo.setThemeMode(mode) }
 
+    val syntaxColors: StateFlow<SyntaxColors> = repo.syntaxColors
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SyntaxColors())
+
+    fun setSyntaxColors(colors: SyntaxColors) = viewModelScope.launch { repo.setSyntaxColors(colors) }
+
+    val foldSymbols: StateFlow<FoldSymbols> = repo.foldSymbols
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FoldSymbols())
+
+    fun setFoldSymbols(symbols: FoldSymbols) = viewModelScope.launch { repo.setFoldSymbols(symbols) }
+
     val allFiles: StateFlow<List<MdFile>> = combine(
         repo.localFiles, repo.remoteUrls
     ) { local, remote -> local + remote }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val favoriteFiles: StateFlow<List<MdFile>> = allFiles
+        .map { files -> files.filter { it.isFavorite } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val recentFiles: StateFlow<List<MdFile>> = allFiles
+        .map { files ->
+            files.filter { it.lastOpenedAt > 0L }
+                .sortedByDescending { it.lastOpenedAt }
+                .take(10)
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _ui = MutableStateFlow(UiState())
@@ -55,13 +80,19 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                     loading = false,
                     currentContent = content,
                     currentFile = file,
-                    isEditing = false,
+                    isEditing = !file.isRemote && !file.isReadOnly,   // edit by default for local files
                     editText = content
                 )
+                // Record open timestamp (fire-and-forget)
+                launch { repo.recordOpen(file.id) }
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message)
             }
         }
+    }
+
+    fun toggleFavorite(file: MdFile) = viewModelScope.launch {
+        repo.toggleFavorite(file.id)
     }
 
     fun startEditing() {

@@ -28,8 +28,13 @@ import com.nele.reader.ui.ReaderViewModel
 @Composable
 fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit, onOpenSettings: () -> Unit = {}) {
     val files by vm.allFiles.collectAsStateWithLifecycle()
+    val favoriteFiles by vm.favoriteFiles.collectAsStateWithLifecycle()
+    val recentFiles by vm.recentFiles.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
-    var fileToDelete by remember { mutableStateOf<MdFile?>(null) }
+    var fileToAction by remember { mutableStateOf<MdFile?>(null) }
+    var showLongPressMenu by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("All", "Favourites", "Recent")
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -61,45 +66,151 @@ fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit, onOpenSettings
             )
         }
     ) { padding ->
-        if (files.isEmpty()) {
-            EmptyState(
-                modifier = Modifier.padding(padding).fillMaxSize(),
-                onAddLocal = { filePicker.launch(arrayOf("text/*")) },
-                onAddRemote = { showAddDialog = true }
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding).fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val local = files.filter { !it.isRemote }
-                val remote = files.filter { it.isRemote }
+        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            // Tab row
+            TabRow(selectedTabIndex = selectedTab) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = { Text(title) }
+                    )
+                }
+            }
 
-                if (local.isNotEmpty()) {
-                    item {
-                        SectionHeader(title = "Local Files", icon = Icons.Default.Storage)
-                    }
-                    items(local, key = { it.id }) { file ->
-                        FileCard(
-                            file = file,
-                            onClick = { onOpenFile(file) },
-                            onLongClick = { fileToDelete = file }
+            when (selectedTab) {
+                0 -> {
+                    // All tab
+                    if (files.isEmpty()) {
+                        EmptyState(
+                            modifier = Modifier.fillMaxSize(),
+                            onAddLocal = { filePicker.launch(arrayOf("text/*")) },
+                            onAddRemote = { showAddDialog = true }
                         )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val local = files.filter { !it.isRemote }
+                            val remote = files.filter { it.isRemote }
+
+                            if (local.isNotEmpty()) {
+                                item {
+                                    SectionHeader(title = "Local Files", icon = Icons.Default.Storage)
+                                }
+                                items(local, key = { it.id }) { file ->
+                                    FileCard(
+                                        file = file,
+                                        onClick = { onOpenFile(file) },
+                                        onLongClick = {
+                                            fileToAction = file
+                                            showLongPressMenu = true
+                                        },
+                                        onToggleFavorite = { vm.toggleFavorite(file) }
+                                    )
+                                }
+                            }
+
+                            if (remote.isNotEmpty()) {
+                                item {
+                                    Spacer(Modifier.height(8.dp))
+                                    SectionHeader(title = "Network Files", icon = Icons.Default.Cloud)
+                                }
+                                items(remote, key = { it.id }) { file ->
+                                    FileCard(
+                                        file = file,
+                                        onClick = { onOpenFile(file) },
+                                        onLongClick = {
+                                            fileToAction = file
+                                            showLongPressMenu = true
+                                        },
+                                        onToggleFavorite = { vm.toggleFavorite(file) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
-                if (remote.isNotEmpty()) {
-                    item {
-                        Spacer(Modifier.height(8.dp))
-                        SectionHeader(title = "Network Files", icon = Icons.Default.Cloud)
+                1 -> {
+                    // Favourites tab
+                    if (favoriteFiles.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.Default.StarOutline,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(72.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                Text(
+                                    "No favourites yet — long-press a file to favourite it",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(favoriteFiles, key = { it.id }) { file ->
+                                FileCard(
+                                    file = file,
+                                    onClick = { onOpenFile(file) },
+                                    onLongClick = {
+                                        fileToAction = file
+                                        showLongPressMenu = true
+                                    },
+                                    onToggleFavorite = { vm.toggleFavorite(file) }
+                                )
+                            }
+                        }
                     }
-                    items(remote, key = { it.id }) { file ->
-                        FileCard(
-                            file = file,
-                            onClick = { onOpenFile(file) },
-                            onLongClick = { fileToDelete = file }
-                        )
+                }
+
+                2 -> {
+                    // Recent tab
+                    if (recentFiles.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(72.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                Text(
+                                    "No recently opened files",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(recentFiles, key = { it.id }) { file ->
+                                FileCard(
+                                    file = file,
+                                    onClick = { onOpenFile(file) },
+                                    onLongClick = {
+                                        fileToAction = file
+                                        showLongPressMenu = true
+                                    },
+                                    onToggleFavorite = { vm.toggleFavorite(file) }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -116,18 +227,58 @@ fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit, onOpenSettings
         )
     }
 
-    fileToDelete?.let { file ->
+    // Long-press menu: Favourite/Unfavourite + Remove
+    if (showLongPressMenu && fileToAction != null) {
+        val file = fileToAction!!
         AlertDialog(
-            onDismissRequest = { fileToDelete = null },
-            title = { Text("Remove file?") },
-            text = { Text("Remove ${file.displayName} from the list?") },
-            confirmButton = {
-                TextButton(onClick = { vm.removeFile(file); fileToDelete = null }) {
-                    Text("Remove", color = MaterialTheme.colorScheme.error)
+            onDismissRequest = {
+                showLongPressMenu = false
+                fileToAction = null
+            },
+            title = { Text(file.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = {
+                            vm.toggleFavorite(file)
+                            showLongPressMenu = false
+                            fileToAction = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            if (file.isFavorite) Icons.Default.Star else Icons.Default.StarOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (file.isFavorite) "Unfavourite" else "Favourite")
+                    }
+                    TextButton(
+                        onClick = {
+                            vm.removeFile(file)
+                            showLongPressMenu = false
+                            fileToAction = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             },
+            confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { fileToDelete = null }) { Text("Cancel") }
+                TextButton(onClick = {
+                    showLongPressMenu = false
+                    fileToAction = null
+                }) { Text("Cancel") }
             }
         )
     }
@@ -153,7 +304,12 @@ private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vect
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FileCard(file: MdFile, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun FileCard(
+    file: MdFile,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onToggleFavorite: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -207,6 +363,17 @@ private fun FileCard(file: MdFile, onClick: () -> Unit, onLongClick: () -> Unit)
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+            }
+            // Star icon button
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    if (file.isFavorite) Icons.Default.Star else Icons.Default.StarOutline,
+                    contentDescription = if (file.isFavorite) "Unfavourite" else "Favourite",
+                    tint = if (file.isFavorite)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             Icon(
                 Icons.Default.ChevronRight,
