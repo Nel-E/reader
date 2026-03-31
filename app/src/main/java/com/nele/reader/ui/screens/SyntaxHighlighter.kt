@@ -13,27 +13,53 @@ import com.nele.reader.model.FoldSymbols
 import com.nele.reader.model.SyntaxColors
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fold block detection
+// Fold block detection  (nested-aware, stack-based)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Finds foldable block character ranges in [text] using [symbols].
- * Each range spans from the first char of the open symbol to the last char of
- * the matching close symbol (inclusive end, so range.last + 1 = exclusive end).
+ * Finds ALL foldable block ranges in [text], including nested blocks and
+ * multiple sibling blocks at any depth.
+ *
+ * Uses a stack so that nested `{{ … {{ … }} … }}` blocks are all found.
+ * Each returned IntRange spans from the first char of the open symbol to
+ * the last char of its matching close symbol (i.e. range.last is inclusive,
+ * range.last + 1 is the exclusive end).
+ *
+ * Example with open="{{" close="}}" and text:
+ *   "{{ A {{ B }} C }} {{ D }}"
+ * Returns (in discovery order, outer before inner):
+ *   [0..16], [5..10], [18..24]
+ *
+ * The list is sorted by start position so callers can iterate left-to-right.
  */
 fun findFoldableBlocks(text: String, symbols: FoldSymbols): List<IntRange> {
-    if (symbols.openSymbol.isEmpty() || symbols.closeSymbol.isEmpty()) return emptyList()
+    val open  = symbols.openSymbol
+    val close = symbols.closeSymbol
+    if (open.isEmpty() || close.isEmpty() || open == close) return emptyList()
+
     val blocks = mutableListOf<IntRange>()
-    var searchFrom = 0
-    while (true) {
-        val openIdx = text.indexOf(symbols.openSymbol, searchFrom)
-        if (openIdx == -1) break
-        val closeIdx = text.indexOf(symbols.closeSymbol, openIdx + symbols.openSymbol.length)
-        if (closeIdx == -1) break
-        blocks.add(openIdx until closeIdx + symbols.closeSymbol.length)
-        searchFrom = closeIdx + symbols.closeSymbol.length
+    // Stack holds the start index of each unmatched open symbol
+    val stack  = ArrayDeque<Int>()
+    var i = 0
+
+    while (i < text.length) {
+        when {
+            text.startsWith(open,  i) -> {
+                stack.addLast(i)
+                i += open.length
+            }
+            text.startsWith(close, i) -> {
+                if (stack.isNotEmpty()) {
+                    val start = stack.removeLast()
+                    blocks.add(start until i + close.length)
+                }
+                i += close.length
+            }
+            else -> i++
+        }
     }
-    return blocks
+
+    return blocks.sortedBy { it.first }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,18 +67,24 @@ fun findFoldableBlocks(text: String, symbols: FoldSymbols): List<IntRange> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * A VisualTransformation that:
- *  1. Replaces folded block ranges with a placeholder ("open ⋯ close")
- *  2. Applies syntax-highlight SpanStyles to the resulting display string
+ * Handles both folding and syntax colouring in one VisualTransformation pass.
  *
- * The placeholder has a different length than the folded content, so we build
- * a precise OffsetMapping that translates cursor offsets between the raw text
- * and the display text.
+ * Folding works by replacing the raw characters of each folded range with a
+ * short placeholder string.  Because the display length differs from the raw
+ * length we build precise originalToDisplay / displayToOriginal tables so that
+ * cursor positioning and text selection remain correct.
+ *
+ * Nested folding is supported: if an outer block is folded its placeholder
+ * hides all inner blocks too; inner blocks can be folded independently while
+ * the outer block is expanded.
+ *
+ * Overlapping ranges (e.g. outer already covers an inner) are handled by
+ * skipping any range whose start falls inside a range that has already been
+ * emitted as a placeholder.
  */
 class CombinedEditorTransformation(
     private val colors: SyntaxColors,
     private val foldSymbols: FoldSymbols,
-    /** Sorted set of folded block ranges (from findFoldableBlocks). */
     private val foldedRanges: Set<IntRange>
 ) : VisualTransformation {
 
@@ -60,26 +92,36 @@ class CombinedEditorTransformation(
         val raw = text.text
 
         if (foldedRanges.isEmpty()) {
-            // No folding — just syntax highlight, identity mapping
-            val highlighted = applySyntaxHighlighting(raw, colors, foldSymbols)
-            return TransformedText(highlighted, OffsetMapping.Identity)
+            return TransformedText(
+                applySyntaxHighlighting(raw, colors, foldSymbols),
+                OffsetMapping.Identity
+            )
         }
 
-        // Sort folded ranges so we process left-to-right
+        // Sort folded ranges by start position; skip any range that is
+        // entirely contained within a range we have already processed
+        // (avoids double-replacing when both an outer and inner block are
+        // folded at the same time — the outer wins).
         val sorted = foldedRanges.sortedBy { it.first }
+        val effective = mutableListOf<IntRange>()
+        var coveredUntil = -1
+        for (r in sorted) {
+            if (r.first >= coveredUntil) {
+                effective.add(r)
+                coveredUntil = r.last + 1
+            }
+        }
 
-        // Build the display string and the offset translation tables
+        // Build display string + offset tables
         val displayBuilder = StringBuilder()
-        // originalToDisplay[i] = display offset for raw offset i
         val originalToDisplay = IntArray(raw.length + 1)
-        // displayToOriginal[j] = raw offset for display offset j
         val displayToOriginalList = mutableListOf<Int>()
 
-        var rawPos = 0
+        var rawPos    = 0
         var displayPos = 0
 
-        for (foldedRange in sorted) {
-            // Copy the part before this folded range
+        for (foldedRange in effective) {
+            // ── Characters before this fold ──────────────────────────────────
             while (rawPos < foldedRange.first) {
                 originalToDisplay[rawPos] = displayPos
                 displayToOriginalList.add(rawPos)
@@ -88,30 +130,27 @@ class CombinedEditorTransformation(
                 displayPos++
             }
 
-            // Emit the placeholder
-            val placeholder = "${foldSymbols.openSymbol} ⋯ ${foldSymbols.closeSymbol}"
+            // ── Placeholder ──────────────────────────────────────────────────
+            val placeholder    = "${foldSymbols.openSymbol} ⋯ ${foldSymbols.closeSymbol}"
             val placeholderLen = placeholder.length
             displayBuilder.append(placeholder)
 
-            // Map all raw positions inside the folded range to the start of placeholder
+            // All raw positions inside the fold map to the placeholder start
             val foldEnd = foldedRange.last + 1  // exclusive
-            while (rawPos < foldEnd && rawPos < raw.length) {
-                originalToDisplay[rawPos] = displayPos
+            while (rawPos < foldEnd) {
+                if (rawPos <= raw.length) originalToDisplay[rawPos] = displayPos
                 rawPos++
             }
-            // The raw position just after the fold maps to just after the placeholder
-            if (rawPos <= raw.length) {
-                originalToDisplay[rawPos.coerceAtMost(raw.length)] = displayPos + placeholderLen
-            }
 
-            // Display positions inside the placeholder all map back to foldedRange.first
+            // Display positions inside the placeholder all map back to
+            // the first raw position of the fold
             repeat(placeholderLen) {
                 displayToOriginalList.add(foldedRange.first)
             }
             displayPos += placeholderLen
         }
 
-        // Copy anything after the last folded range
+        // ── Characters after last fold ────────────────────────────────────────
         while (rawPos < raw.length) {
             originalToDisplay[rawPos] = displayPos
             displayToOriginalList.add(rawPos)
@@ -119,26 +158,20 @@ class CombinedEditorTransformation(
             rawPos++
             displayPos++
         }
-        // Sentinel: end-of-string
+        // Sentinel for end-of-string
         originalToDisplay[raw.length] = displayPos
         displayToOriginalList.add(raw.length)
 
-        val displayText = displayBuilder.toString()
+        val displayText        = displayBuilder.toString()
+        val highlighted        = applySyntaxHighlighting(displayText, colors, foldSymbols)
+        val displayToOriginal  = displayToOriginalList.toIntArray()
 
-        // Apply syntax highlighting to the display string
-        val highlighted = applySyntaxHighlighting(displayText, colors, foldSymbols)
-
-        // Build the OffsetMapping
-        val displayToOriginal = displayToOriginalList.toIntArray()
         val offsetMapping = object : OffsetMapping {
-            override fun originalToTransformed(offset: Int): Int {
-                val clamped = offset.coerceIn(0, raw.length)
-                return originalToDisplay[clamped]
-            }
-            override fun transformedToOriginal(offset: Int): Int {
-                val clamped = offset.coerceIn(0, displayToOriginal.size - 1)
-                return displayToOriginal[clamped]
-            }
+            override fun originalToTransformed(offset: Int): Int =
+                originalToDisplay[offset.coerceIn(0, raw.length)]
+
+            override fun transformedToOriginal(offset: Int): Int =
+                displayToOriginal[offset.coerceIn(0, displayToOriginal.size - 1)]
         }
 
         return TransformedText(highlighted, offsetMapping)
@@ -146,7 +179,7 @@ class CombinedEditorTransformation(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Syntax highlighting (operates on already-display text, no length changes)
+// Syntax highlighting
 // ─────────────────────────────────────────────────────────────────────────────
 
 private fun applySyntaxHighlighting(
@@ -156,102 +189,69 @@ private fun applySyntaxHighlighting(
 ): AnnotatedString = buildAnnotatedString {
     append(text)
 
+    // ── Line-level patterns ───────────────────────────────────────────────────
     val lines = text.lines()
     var offset = 0
     for (line in lines) {
         val lineStart = offset
-        val lineEnd = offset + line.length
+        val lineEnd   = offset + line.length
 
-        // Headings: lines starting with #
         if (Regex("^#{1,6}\\s").containsMatchIn(line)) {
             addStyle(
                 SpanStyle(color = colors.heading, fontWeight = FontWeight.Bold),
                 lineStart, lineEnd
             )
         } else {
-            // Blockquote
             if (line.trimStart().startsWith(">")) {
                 addStyle(
                     SpanStyle(color = colors.blockquote, fontStyle = FontStyle.Italic),
                     lineStart, lineEnd
                 )
             }
-            // List markers
             val listMatch = Regex("^(\\s*)([-*]|\\d+\\.)\\s").find(line)
             if (listMatch != null) {
-                val indent = listMatch.groups[1]?.range?.last?.plus(1) ?: 0
+                val indent    = listMatch.groups[1]?.range?.last?.plus(1) ?: 0
                 val markerEnd = lineStart + (listMatch.groups[0]?.range?.last?.plus(1) ?: 0)
-                addStyle(
-                    SpanStyle(color = colors.listMarker),
-                    lineStart + indent,
-                    markerEnd
-                )
+                addStyle(SpanStyle(color = colors.listMarker), lineStart + indent, markerEnd)
             }
         }
         offset = lineEnd + 1
     }
 
-    // Code blocks ```...```
-    val codeBlockRegex = Regex("```[\\s\\S]*?```", RegexOption.DOT_MATCHES_ALL)
-    for (m in codeBlockRegex.findAll(text)) {
-        addStyle(
-            SpanStyle(color = colors.code, fontFamily = FontFamily.Monospace),
-            m.range.first, m.range.last + 1
-        )
-    }
+    // ── Inline / span patterns ────────────────────────────────────────────────
+
+    // Code blocks ```...```  (before inline code so ``` wins over `)
+    for (m in Regex("```[\\s\\S]*?```", RegexOption.DOT_MATCHES_ALL).findAll(text))
+        addStyle(SpanStyle(color = colors.code, fontFamily = FontFamily.Monospace),
+            m.range.first, m.range.last + 1)
 
     // Inline code `...`
-    val inlineCodeRegex = Regex("`[^`\n]+`")
-    for (m in inlineCodeRegex.findAll(text)) {
-        addStyle(
-            SpanStyle(color = colors.code, fontFamily = FontFamily.Monospace),
-            m.range.first, m.range.last + 1
-        )
-    }
+    for (m in Regex("`[^`\n]+`").findAll(text))
+        addStyle(SpanStyle(color = colors.code, fontFamily = FontFamily.Monospace),
+            m.range.first, m.range.last + 1)
 
     // Bold **...**
-    val boldRegex = Regex("\\*\\*(.+?)\\*\\*")
-    for (m in boldRegex.findAll(text)) {
-        addStyle(
-            SpanStyle(color = colors.bold, fontWeight = FontWeight.Bold),
-            m.range.first, m.range.last + 1
-        )
-    }
+    for (m in Regex("\\*\\*(.+?)\\*\\*").findAll(text))
+        addStyle(SpanStyle(color = colors.bold, fontWeight = FontWeight.Bold),
+            m.range.first, m.range.last + 1)
 
     // Italic *...* or _..._
-    val italicRegex = Regex("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
-    for (m in italicRegex.findAll(text)) {
-        addStyle(
-            SpanStyle(color = colors.italic, fontStyle = FontStyle.Italic),
-            m.range.first, m.range.last + 1
-        )
-    }
+    for (m in Regex("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)").findAll(text))
+        addStyle(SpanStyle(color = colors.italic, fontStyle = FontStyle.Italic),
+            m.range.first, m.range.last + 1)
 
     // Links [text](url)
-    val linkRegex = Regex("\\[([^\\]]+)\\]\\(([^)]+)\\)")
-    for (m in linkRegex.findAll(text)) {
+    for (m in Regex("\\[([^\\]]+)\\]\\(([^)]+)\\)").findAll(text))
         addStyle(SpanStyle(color = colors.link), m.range.first, m.range.last + 1)
-    }
 
-    // Fold open symbol
-    if (foldSymbols.openSymbol.isNotEmpty()) {
-        val r = Regex(Regex.escape(foldSymbols.openSymbol))
-        for (m in r.findAll(text)) {
-            addStyle(
-                SpanStyle(color = colors.foldOpen, fontWeight = FontWeight.Bold),
-                m.range.first, m.range.last + 1
-            )
-        }
-    }
+    // Fold symbols
+    if (foldSymbols.openSymbol.isNotEmpty())
+        for (m in Regex(Regex.escape(foldSymbols.openSymbol)).findAll(text))
+            addStyle(SpanStyle(color = colors.foldOpen, fontWeight = FontWeight.Bold),
+                m.range.first, m.range.last + 1)
 
-    // Fold close symbol
-    if (foldSymbols.closeSymbol.isNotEmpty()) {
-        val r = Regex(Regex.escape(foldSymbols.closeSymbol))
-        for (m in r.findAll(text)) {
-            addStyle(
-                SpanStyle(color = colors.foldClose, fontWeight = FontWeight.Bold),
-                m.range.first, m.range.last + 1
-            )
-        }
-    }
+    if (foldSymbols.closeSymbol.isNotEmpty())
+        for (m in Regex(Regex.escape(foldSymbols.closeSymbol)).findAll(text))
+            addStyle(SpanStyle(color = colors.foldClose, fontWeight = FontWeight.Bold),
+                m.range.first, m.range.last + 1)
 }

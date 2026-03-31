@@ -234,8 +234,12 @@ private fun FoldGutter(
     onToggleFold: (IntRange) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Find which line numbers contain fold open symbols
     val lines = text.lines()
+
+    // Build a map: lineIndex -> list of foldable blocks whose open symbol
+    // starts on that line.  We only show a block if it is NOT entirely
+    // contained inside an already-folded parent block (i.e. the parent
+    // is folded and covers this block — it would be hidden in the display).
     val lineStarts = mutableListOf<Int>()
     var pos = 0
     for (line in lines) {
@@ -243,26 +247,50 @@ private fun FoldGutter(
         pos += line.length + 1
     }
 
+    // Pre-compute which ranges are "shadowed" by a folded ancestor
+    fun isShadowed(block: IntRange): Boolean {
+        return foldedRanges.any { parent ->
+            parent != block &&
+            parent.first <= block.first &&
+            parent.last  >= block.last
+        }
+    }
+
     Column(modifier = modifier) {
-        lines.forEachIndexed { lineIndex, _ ->
+        lines.forEachIndexed { lineIndex, line ->
             val lineStart = lineStarts[lineIndex]
-            // Find if any foldable block starts on this line
-            val blockOnLine = foldableBlocks.firstOrNull { block ->
-                block.first >= lineStart && block.first < lineStart + lines[lineIndex].length + 1
+            val lineEnd   = lineStart + line.length
+
+            // All blocks whose open symbol starts on this line
+            val blocksOnLine = foldableBlocks.filter { block ->
+                block.first >= lineStart && block.first <= lineEnd
             }
-            if (blockOnLine != null) {
-                val isFolded = foldedRanges.any { it == blockOnLine }
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clickable { onToggleFold(blockOnLine) },
-                    contentAlignment = Alignment.Center
+
+            // Filter out blocks shadowed by a folded ancestor
+            val visibleBlocks = blocksOnLine.filter { !isShadowed(it) }
+
+            if (visibleBlocks.isNotEmpty()) {
+                // Stack multiple icons vertically if more than one block
+                // starts on the same line (rare but possible)
+                Column(
+                    modifier = Modifier.width(28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = if (isFolded) "▸" else "▾",
-                        style = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    visibleBlocks.forEach { block ->
+                        val isFolded = foldedRanges.any { it == block }
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clickable { onToggleFold(block) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isFolded) "▸" else "▾",
+                                style = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             } else {
                 Spacer(modifier = Modifier.size(28.dp))
