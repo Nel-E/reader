@@ -153,32 +153,37 @@ private fun EditorPane(
     foldSymbols: FoldSymbols,
     modifier: Modifier = Modifier
 ) {
-    // Track folded block ranges (character ranges in raw text)
+    // foldedRanges: set of character ranges (in raw text) that are currently collapsed
     var foldedRanges by remember { mutableStateOf(setOf<IntRange>()) }
+
+    // Recompute foldable blocks whenever text or fold symbols change
+    val foldableBlocks = remember(text, foldSymbols) { findFoldableBlocks(text, foldSymbols) }
+
+    // Drop any stale foldedRanges that no longer exist in foldableBlocks
+    LaunchedEffect(foldableBlocks) {
+        foldedRanges = foldedRanges.filter { r -> foldableBlocks.any { it == r } }.toSet()
+    }
 
     // TextFieldValue to preserve cursor position
     var tfValue by remember { mutableStateOf(TextFieldValue(text)) }
-    // When text changes externally, update content but preserve selection
     LaunchedEffect(text) {
         if (tfValue.text != text) tfValue = TextFieldValue(text)
     }
 
     val colorScheme = MaterialTheme.colorScheme
-    val foldableBlocks = remember(text, foldSymbols) { findFoldableBlocks(text, foldSymbols) }
 
     Row(modifier = modifier) {
-        // Fold gutter: narrow column on the left
+        // ── Fold gutter ───────────────────────────────────────────────────
         if (foldableBlocks.isNotEmpty()) {
             FoldGutter(
                 text = text,
                 foldableBlocks = foldableBlocks,
                 foldedRanges = foldedRanges,
                 onToggleFold = { block ->
-                    foldedRanges = if (foldedRanges.any { it == block }) {
-                        foldedRanges.filter { it != block }.toSet()
-                    } else {
-                        foldedRanges.toMutableSet().also { it.add(block) }
-                    }
+                    val mutable = foldedRanges.toMutableSet()
+                    if (mutable.any { it == block }) mutable.removeIf { it == block }
+                    else mutable.add(block)
+                    foldedRanges = mutable
                 },
                 modifier = Modifier
                     .width(28.dp)
@@ -187,7 +192,9 @@ private fun EditorPane(
             )
         }
 
-        // BasicTextField with syntax highlighting visual transformation
+        // ── Editor ────────────────────────────────────────────────────────
+        // CombinedEditorTransformation handles BOTH folding (with correct
+        // OffsetMapping) AND syntax colouring in one pass.
         BasicTextField(
             value = tfValue,
             onValueChange = { new ->
@@ -197,6 +204,7 @@ private fun EditorPane(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
                 .padding(8.dp),
             textStyle = TextStyle(
                 fontFamily = FontFamily.Monospace,
@@ -204,7 +212,11 @@ private fun EditorPane(
                 color = colorScheme.onBackground
             ),
             cursorBrush = SolidColor(colorScheme.primary),
-            visualTransformation = SyntaxHighlightTransformation(syntaxColors, foldSymbols),
+            visualTransformation = CombinedEditorTransformation(
+                colors = syntaxColors,
+                foldSymbols = foldSymbols,
+                foldedRanges = foldedRanges
+            ),
             decorationBox = { innerTextField ->
                 Box(modifier = Modifier.fillMaxSize()) {
                     innerTextField()
