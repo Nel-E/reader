@@ -22,7 +22,9 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.html.HtmlPlugin
-import io.noties.markwon.image.okhttp.OkHttpImagesPlugin
+import io.noties.markwon.image.ImagesPlugin
+import io.noties.markwon.image.network.OkHttpNetworkSchemeHandler
+import okhttp3.OkHttpClient
 import io.noties.markwon.linkify.LinkifyPlugin
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -121,7 +123,7 @@ private fun MarkdownPane(content: String, markwon: Markwon, modifier: Modifier =
                     setPadding(24, 24, 24, 24)
                     textSize = 15f
                     setLineSpacing(4f, 1.2f)
-                    isTextSelectable = true
+                    setTextIsSelectable(true)
                 }
             },
             update = { tv -> markwon.setMarkdown(tv, content) },
@@ -150,6 +152,8 @@ private fun buildMarkwon(context: Context): Markwon = Markwon.builder(context)
     .usePlugin(StrikethroughPlugin.create())
     .usePlugin(TablePlugin.create(context))
     .usePlugin(HtmlPlugin.create())
-    .usePlugin(OkHttpImagesPlugin.create())
+    .usePlugin(ImagesPlugin.create { plugin ->
+        plugin.addSchemeHandler(OkHttpNetworkSchemeHandler.create(OkHttpClient()))
+    })
     .usePlugin(LinkifyPlugin.create())
     .build()

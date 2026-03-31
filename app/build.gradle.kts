@@ -33,6 +33,10 @@ android {
     buildFeatures { compose = true }
 }
 
+configurations.all {
+    exclude(group = "org.jetbrains", module = "annotations-java5")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -49,7 +53,7 @@ dependencies {
     implementation(libs.markwon.ext.tables)
     implementation(libs.markwon.ext.strikethrough)
     implementation(libs.markwon.html)
-    implementation(libs.markwon.image.okhttp)
+    implementation(libs.markwon.image)
     implementation(libs.markwon.linkify)
     implementation(libs.markwon.syntax.highlight)
     implementation(libs.androidx.documentfile)
