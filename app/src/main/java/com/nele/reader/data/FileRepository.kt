@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.nele.reader.model.MdFile
+import com.nele.reader.model.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -23,6 +24,21 @@ class FileRepository(private val context: Context) {
 
     private val LOCAL_FILES_KEY  = stringPreferencesKey("local_files")
     private val REMOTE_URLS_KEY  = stringPreferencesKey("remote_urls")
+    private val THEME_MODE_KEY   = stringPreferencesKey("theme_mode")
+
+    val themeMode: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
+        when (prefs[THEME_MODE_KEY]) {
+            "LIGHT" -> ThemeMode.LIGHT
+            "DARK"  -> ThemeMode.DARK
+            else    -> ThemeMode.SYSTEM
+        }
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.dataStore.edit { prefs ->
+            prefs[THEME_MODE_KEY] = mode.name
+        }
+    }
 
     val localFiles: Flow<List<MdFile>> = context.dataStore.data.map { prefs ->
         val json = prefs[LOCAL_FILES_KEY] ?: "[]"

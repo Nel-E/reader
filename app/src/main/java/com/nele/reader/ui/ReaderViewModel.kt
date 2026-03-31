@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nele.reader.data.FileRepository
 import com.nele.reader.model.MdFile
+import com.nele.reader.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +27,11 @@ data class UiState(
 class ReaderViewModel(application: Application) : AndroidViewModel(application) {
 
     val repo = FileRepository(application)
+
+    val themeMode: StateFlow<ThemeMode> = repo.themeMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemeMode.SYSTEM)
+
+    fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { repo.setThemeMode(mode) }
 
     val allFiles: StateFlow<List<MdFile>> = combine(
         repo.localFiles, repo.remoteUrls

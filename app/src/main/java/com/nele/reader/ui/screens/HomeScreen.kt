@@ -26,7 +26,7 @@ import com.nele.reader.ui.ReaderViewModel
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit) {
+fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit, onOpenSettings: () -> Unit = {}) {
     val files by vm.allFiles.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var fileToDelete by remember { mutableStateOf<MdFile?>(null) }
@@ -50,6 +50,9 @@ fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit) {
                     }
                     IconButton(onClick = { showAddDialog = true }) {
                         Icon(Icons.Default.AddLink, contentDescription = "Add network URL")
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
