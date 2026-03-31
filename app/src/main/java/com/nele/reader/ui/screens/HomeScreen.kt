@@ -24,7 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nele.reader.model.MdFile
 import com.nele.reader.ui.ReaderViewModel
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(vm: ReaderViewModel, onOpenFile: (MdFile) -> Unit) {
     val files by vm.allFiles.collectAsStateWithLifecycle()
