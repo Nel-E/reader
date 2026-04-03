@@ -15,6 +15,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -34,6 +37,7 @@ import io.noties.markwon.html.HtmlPlugin
 import io.noties.markwon.image.ImagesPlugin
 import io.noties.markwon.image.network.OkHttpNetworkSchemeHandler
 import io.noties.markwon.linkify.LinkifyPlugin
+import kotlin.math.roundToInt
 import okhttp3.OkHttpClient
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -171,14 +175,27 @@ private fun EditorPane(
     }
 
     val colorScheme = MaterialTheme.colorScheme
+    val scrollState = rememberScrollState()
+    val transformation = remember(syntaxColors, foldSymbols, foldedRanges) {
+        CombinedEditorTransformation(
+            colors = syntaxColors,
+            foldSymbols = foldSymbols,
+            foldedRanges = foldedRanges
+        )
+    }
+    val transformSnapshot = remember(text, foldSymbols, foldedRanges) {
+        buildFoldTransformSnapshot(text, foldSymbols, foldedRanges)
+    }
+    var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     Row(modifier = modifier) {
         // ── Fold gutter ───────────────────────────────────────────────────
         if (foldableBlocks.isNotEmpty()) {
             FoldGutter(
-                text = text,
                 foldableBlocks = foldableBlocks,
                 foldedRanges = foldedRanges,
+                transformSnapshot = transformSnapshot,
+                textLayoutResult = textLayoutResult,
                 onToggleFold = { block ->
                     val mutable = foldedRanges.toMutableSet()
                     if (mutable.any { it == block }) mutable.removeIf { it == block }
@@ -188,6 +205,7 @@ private fun EditorPane(
                 modifier = Modifier
                     .width(28.dp)
                     .fillMaxHeight()
+                    .verticalScroll(scrollState)
                     .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
             )
         }
@@ -204,7 +222,7 @@ private fun EditorPane(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(8.dp),
             textStyle = TextStyle(
                 fontFamily = FontFamily.Monospace,
@@ -212,11 +230,8 @@ private fun EditorPane(
                 color = colorScheme.onBackground
             ),
             cursorBrush = SolidColor(colorScheme.primary),
-            visualTransformation = CombinedEditorTransformation(
-                colors = syntaxColors,
-                foldSymbols = foldSymbols,
-                foldedRanges = foldedRanges
-            ),
+            visualTransformation = transformation,
+            onTextLayout = { textLayoutResult = it },
             decorationBox = { innerTextField ->
                 Box(modifier = Modifier.fillMaxSize()) {
                     innerTextField()
@@ -228,26 +243,13 @@ private fun EditorPane(
 
 @Composable
 private fun FoldGutter(
-    text: String,
     foldableBlocks: List<IntRange>,
     foldedRanges: Set<IntRange>,
+    transformSnapshot: FoldTransformSnapshot,
+    textLayoutResult: TextLayoutResult?,
     onToggleFold: (IntRange) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val lines = text.lines()
-
-    // Build a map: lineIndex -> list of foldable blocks whose open symbol
-    // starts on that line.  We only show a block if it is NOT entirely
-    // contained inside an already-folded parent block (i.e. the parent
-    // is folded and covers this block — it would be hidden in the display).
-    val lineStarts = mutableListOf<Int>()
-    var pos = 0
-    for (line in lines) {
-        lineStarts.add(pos)
-        pos += line.length + 1
-    }
-
-    // Pre-compute which ranges are "shadowed" by a folded ancestor
     fun isShadowed(block: IntRange): Boolean {
         return foldedRanges.any { parent ->
             parent != block &&
@@ -256,44 +258,52 @@ private fun FoldGutter(
         }
     }
 
-    Column(modifier = modifier) {
-        lines.forEachIndexed { lineIndex, line ->
-            val lineStart = lineStarts[lineIndex]
-            val lineEnd   = lineStart + line.length
+    val layout = textLayoutResult
+    val density = LocalDensity.current
 
-            // All blocks whose open symbol starts on this line
-            val blocksOnLine = foldableBlocks.filter { block ->
-                block.first >= lineStart && block.first <= lineEnd
-            }
+    if (layout == null) {
+        Box(modifier = modifier)
+        return
+    }
 
-            // Filter out blocks shadowed by a folded ancestor
-            val visibleBlocks = blocksOnLine.filter { !isShadowed(it) }
+    val blocksByLine = foldableBlocks
+        .asSequence()
+        .filter { !isShadowed(it) }
+        .groupBy { block ->
+            val transformedOffset = transformSnapshot.originalToDisplay[block.first]
+                .coerceIn(0, transformSnapshot.displayText.length)
+            layout.getLineForOffset(transformedOffset)
+        }
+        .toSortedMap()
 
-            if (visibleBlocks.isNotEmpty()) {
-                // Stack multiple icons vertically if more than one block
-                // starts on the same line (rare but possible)
-                Column(
-                    modifier = Modifier.width(28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    visibleBlocks.forEach { block ->
-                        val isFolded = foldedRanges.any { it == block }
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clickable { onToggleFold(block) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (isFolded) "▸" else "▾",
-                                style = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+    val gutterHeight = with(density) { layout.size.height.toDp() }
+
+    Box(
+        modifier = modifier.height(gutterHeight)
+    ) {
+        blocksByLine.forEach { (lineIndex, blocksOnLine) ->
+            val lineTop = layout.getLineTop(lineIndex)
+            Column(
+                modifier = Modifier
+                    .width(28.dp)
+                    .offset { IntOffset(0, lineTop.roundToInt()) },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                blocksOnLine.forEach { block ->
+                    val isFolded = foldedRanges.any { it == block }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clickable { onToggleFold(block) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (isFolded) "▸" else "▾",
+                            style = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
-            } else {
-                Spacer(modifier = Modifier.size(28.dp))
             }
         }
     }

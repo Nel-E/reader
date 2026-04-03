@@ -1,0 +1,9 @@
+ANDROID_SDK_ROOT=M:\.android-studio\Sdk
+JAVA_HOME=C:\Program Files\Android\Android Studio\jbr\
+JAVA_EXE=C:\Program Files\Android\Android Studio\jbr\bin\java.exe
+BUILD_TOOLS_35=M:\.android-studio\Sdk\build-tools\35.0.0
+AVAILABLE_PLATFORMS=M:\.android-studio\Sdk\platforms\android-34;M:\.android-studio\Sdk\platforms\android-36;M:\.android-studio\Sdk\platforms\android-36.1
+WRAPPER_REQUIRED_GRADLE=gradle-9.1.0-bin
+AVAILABLE_LOCAL_GRADLE_DISTS=M:\.android-studio\Sdk\wrapper\dists\gradle-8.13-bin;M:\.android-studio\Sdk\wrapper\dists\gradle-8.14-bin;M:\.android-studio\Sdk\wrapper\dists\gradle-8.2.1-bin;M:\.android-studio\Sdk\wrapper\dists\gradle-8.4-bin;M:\.android-studio\Sdk\wrapper\dists\gradle-8.5-bin;M:\.android-studio\Sdk\wrapper\dists\gradle-9.1.0-bin
+MISSING_PLATFORM_ANDROID_35=NOT_FOUND
+MISSING_GRADLE_9_1_0=FOUND_IN_M:\.android-studio\Sdk\wrapper\dists\gradle-9.1.0-bin

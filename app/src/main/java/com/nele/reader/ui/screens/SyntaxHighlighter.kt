@@ -16,6 +16,12 @@ import com.nele.reader.model.SyntaxColors
 // Fold block detection  (nested-aware, stack-based)
 // ─────────────────────────────────────────────────────────────────────────────
 
+data class FoldTransformSnapshot(
+    val displayText: String,
+    val originalToDisplay: IntArray,
+    val displayToOriginal: IntArray
+)
+
 /**
  * Finds ALL foldable block ranges in [text], including nested blocks and
  * multiple sibling blocks at any depth.
@@ -62,6 +68,80 @@ fun findFoldableBlocks(text: String, symbols: FoldSymbols): List<IntRange> {
     return blocks.sortedBy { it.first }
 }
 
+fun buildFoldTransformSnapshot(
+    raw: String,
+    foldSymbols: FoldSymbols,
+    foldedRanges: Set<IntRange>
+): FoldTransformSnapshot {
+    if (foldedRanges.isEmpty()) {
+        val identity = IntArray(raw.length + 1) { it }
+        return FoldTransformSnapshot(
+            displayText = raw,
+            originalToDisplay = identity,
+            displayToOriginal = identity.copyOf()
+        )
+    }
+
+    val sorted = foldedRanges.sortedBy { it.first }
+    val effective = mutableListOf<IntRange>()
+    var coveredUntil = -1
+    for (r in sorted) {
+        if (r.first >= coveredUntil) {
+            effective.add(r)
+            coveredUntil = r.last + 1
+        }
+    }
+
+    val displayBuilder = StringBuilder()
+    val originalToDisplay = IntArray(raw.length + 1)
+    val displayToOriginalList = mutableListOf<Int>()
+
+    var rawPos = 0
+    var displayPos = 0
+
+    for (foldedRange in effective) {
+        while (rawPos < foldedRange.first) {
+            originalToDisplay[rawPos] = displayPos
+            displayToOriginalList.add(rawPos)
+            displayBuilder.append(raw[rawPos])
+            rawPos++
+            displayPos++
+        }
+
+        val placeholder = "${foldSymbols.openSymbol} ⋯ ${foldSymbols.closeSymbol}"
+        val placeholderLen = placeholder.length
+        displayBuilder.append(placeholder)
+
+        val foldEnd = foldedRange.last + 1
+        while (rawPos < foldEnd) {
+            originalToDisplay[rawPos] = displayPos
+            rawPos++
+        }
+
+        repeat(placeholderLen) {
+            displayToOriginalList.add(foldedRange.first)
+        }
+        displayPos += placeholderLen
+    }
+
+    while (rawPos < raw.length) {
+        originalToDisplay[rawPos] = displayPos
+        displayToOriginalList.add(rawPos)
+        displayBuilder.append(raw[rawPos])
+        rawPos++
+        displayPos++
+    }
+
+    originalToDisplay[raw.length] = displayPos
+    displayToOriginalList.add(raw.length)
+
+    return FoldTransformSnapshot(
+        displayText = displayBuilder.toString(),
+        originalToDisplay = originalToDisplay,
+        displayToOriginal = displayToOriginalList.toIntArray()
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Combined VisualTransformation: folding + syntax highlighting
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,88 +170,15 @@ class CombinedEditorTransformation(
 
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
-
-        if (foldedRanges.isEmpty()) {
-            return TransformedText(
-                applySyntaxHighlighting(raw, colors, foldSymbols),
-                OffsetMapping.Identity
-            )
-        }
-
-        // Sort folded ranges by start position; skip any range that is
-        // entirely contained within a range we have already processed
-        // (avoids double-replacing when both an outer and inner block are
-        // folded at the same time — the outer wins).
-        val sorted = foldedRanges.sortedBy { it.first }
-        val effective = mutableListOf<IntRange>()
-        var coveredUntil = -1
-        for (r in sorted) {
-            if (r.first >= coveredUntil) {
-                effective.add(r)
-                coveredUntil = r.last + 1
-            }
-        }
-
-        // Build display string + offset tables
-        val displayBuilder = StringBuilder()
-        val originalToDisplay = IntArray(raw.length + 1)
-        val displayToOriginalList = mutableListOf<Int>()
-
-        var rawPos    = 0
-        var displayPos = 0
-
-        for (foldedRange in effective) {
-            // ── Characters before this fold ──────────────────────────────────
-            while (rawPos < foldedRange.first) {
-                originalToDisplay[rawPos] = displayPos
-                displayToOriginalList.add(rawPos)
-                displayBuilder.append(raw[rawPos])
-                rawPos++
-                displayPos++
-            }
-
-            // ── Placeholder ──────────────────────────────────────────────────
-            val placeholder    = "${foldSymbols.openSymbol} ⋯ ${foldSymbols.closeSymbol}"
-            val placeholderLen = placeholder.length
-            displayBuilder.append(placeholder)
-
-            // All raw positions inside the fold map to the placeholder start
-            val foldEnd = foldedRange.last + 1  // exclusive
-            while (rawPos < foldEnd) {
-                if (rawPos <= raw.length) originalToDisplay[rawPos] = displayPos
-                rawPos++
-            }
-
-            // Display positions inside the placeholder all map back to
-            // the first raw position of the fold
-            repeat(placeholderLen) {
-                displayToOriginalList.add(foldedRange.first)
-            }
-            displayPos += placeholderLen
-        }
-
-        // ── Characters after last fold ────────────────────────────────────────
-        while (rawPos < raw.length) {
-            originalToDisplay[rawPos] = displayPos
-            displayToOriginalList.add(rawPos)
-            displayBuilder.append(raw[rawPos])
-            rawPos++
-            displayPos++
-        }
-        // Sentinel for end-of-string
-        originalToDisplay[raw.length] = displayPos
-        displayToOriginalList.add(raw.length)
-
-        val displayText        = displayBuilder.toString()
-        val highlighted        = applySyntaxHighlighting(displayText, colors, foldSymbols)
-        val displayToOriginal  = displayToOriginalList.toIntArray()
+        val snapshot = buildFoldTransformSnapshot(raw, foldSymbols, foldedRanges)
+        val highlighted = applySyntaxHighlighting(snapshot.displayText, colors, foldSymbols)
 
         val offsetMapping = object : OffsetMapping {
             override fun originalToTransformed(offset: Int): Int =
-                originalToDisplay[offset.coerceIn(0, raw.length)]
+                snapshot.originalToDisplay[offset.coerceIn(0, raw.length)]
 
             override fun transformedToOriginal(offset: Int): Int =
-                displayToOriginal[offset.coerceIn(0, displayToOriginal.size - 1)]
+                snapshot.displayToOriginal[offset.coerceIn(0, snapshot.displayToOriginal.size - 1)]
         }
 
         return TransformedText(highlighted, offsetMapping)

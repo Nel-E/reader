@@ -1,10 +1,61 @@
-*.iml
-.gradle
-/local.properties
-/.idea
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration files
 local.properties
+*.iml
+.idea/
+.DS_Store
+*.log
+*.tmp
+
+# Android
+app/build/
+app/bin/
+app/.cxx/
+app/local.properties
+app/release/
+
+# Kotlin
+*.kotlin_module
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+
+# Release files
+releases/
+
+# Misc
+*.swp
+*.swo
+
+# Reports
+build/reports/
+
+# Ignore generated navigation XML
+app/build/generated/
+app/build/updated_navigation_xml/
+
+# Ignore intermediates
+app/build/intermediates/
+
+# Ignore outputs
+app/build/outputs/
+
+# Ignore tmp
+app/build/tmp/
+
+# Ignore compiled classes
+app/build/kotlin/
+app/build/kotlin-classes/
+
+# Ignore other build artifacts
+app/build/aarLibraries/
+app/build/merged_*/
+app/build/packaged_*/
+
+# Ignore problem reports
+build/reports/problems/
