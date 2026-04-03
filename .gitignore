@@ -1,3 +1,5 @@
+# Ignore Gradle user cache
+.gradle-user/
 # Gradle
 .gradle/
 build/
